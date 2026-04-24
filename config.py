@@ -1,7 +1,8 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(Path(__file__).parent / ".env")
 
 # Build local DB URL from individual params
 _host = os.environ["LOCAL_DB_HOST"]

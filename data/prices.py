@@ -12,9 +12,20 @@ def _get_stock_id(session, ticker: str) -> int:
     return stock.id
 
 
+def _safe_info(t) -> dict:
+    import time
+    for attempt in range(3):
+        try:
+            return t.info or {}
+        except Exception:
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+    return {}
+
+
 def fetch_and_store_prices(ticker: str, start: date = None, end: date = None):
     t = yf.Ticker(ticker.upper())
-    info = t.info
+    info = _safe_info(t)
 
     if start and end:
         hist = t.history(start=str(start), end=str(end))
@@ -27,21 +38,27 @@ def fetch_and_store_prices(ticker: str, start: date = None, end: date = None):
     low_52w = info.get("fiftyTwoWeekLow")
     debt_to_equity = info.get("debtToEquity")
 
+    def _f(v):
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
     rows = []
     for ts, row in hist.iterrows():
         rows.append({
             "date": ts.date(),
-            "open": row.get("Open"),
-            "high": row.get("High"),
-            "low": row.get("Low"),
-            "close": row.get("Close"),
-            "volume": row.get("Volume"),
-            "adj_close": row.get("Close"),
-            "pe_ratio": pe_ratio,
-            "eps": eps,
-            "fifty_two_week_high": high_52w,
-            "fifty_two_week_low": low_52w,
-            "debt_to_equity": debt_to_equity,
+            "open": _f(row.get("Open")),
+            "high": _f(row.get("High")),
+            "low": _f(row.get("Low")),
+            "close": _f(row.get("Close")),
+            "volume": _f(row.get("Volume")),
+            "adj_close": _f(row.get("Close")),
+            "pe_ratio": _f(pe_ratio),
+            "eps": _f(eps),
+            "fifty_two_week_high": _f(high_52w),
+            "fifty_two_week_low": _f(low_52w),
+            "debt_to_equity": _f(debt_to_equity),
         })
 
     def _store(session, stock_id, rows):

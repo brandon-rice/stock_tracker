@@ -32,9 +32,9 @@ def compute_and_store_moving_averages(ticker: str):
         for d, row in df.iterrows():
             ma_rows.append({
                 "date": d,
-                "ma_30": round(row["ma_30"], 4) if pd.notna(row["ma_30"]) else None,
-                "ma_60": round(row["ma_60"], 4) if pd.notna(row["ma_60"]) else None,
-                "ma_90": round(row["ma_90"], 4) if pd.notna(row["ma_90"]) else None,
+                "ma_30": round(float(row["ma_30"]), 4) if pd.notna(row["ma_30"]) else None,
+                "ma_60": round(float(row["ma_60"]), 4) if pd.notna(row["ma_60"]) else None,
+                "ma_90": round(float(row["ma_90"]), 4) if pd.notna(row["ma_90"]) else None,
             })
 
         def _store(session, stock_id):

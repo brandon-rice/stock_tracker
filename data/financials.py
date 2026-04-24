@@ -35,7 +35,7 @@ def fetch_and_store_financials(ticker: str):
                     ops = _safe_get(cashflow, col, ["Operating Cash Flow", "Total Cash From Operating Activities"])
                     capex = _safe_get(cashflow, col, ["Capital Expenditure", "Capital Expenditures"])
                     if ops is not None and capex is not None:
-                        fcf = ops - abs(capex)
+                        fcf = float(ops - abs(capex))
 
                 rows.append({
                     "fiscal_year": fiscal_year,

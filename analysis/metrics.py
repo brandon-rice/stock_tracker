@@ -6,7 +6,7 @@ from db.models import Stock, Financials, ComputedMetrics
 
 def _pct_change(new, old):
     if old and old != 0 and new is not None:
-        return round((new - old) / abs(old) * 100, 2)
+        return round(float((new - old) / abs(old) * 100), 2)
     return None
 
 

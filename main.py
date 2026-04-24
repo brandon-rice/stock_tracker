@@ -26,14 +26,25 @@ def init_db_cmd():
     init_db()
 
 
+def _get_company_name(ticker: str) -> str:
+    import time
+    for attempt in range(3):
+        try:
+            info = yf.Ticker(ticker).info
+            return info.get("longName") or info.get("shortName") or ticker
+        except Exception:
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+    return ticker
+
+
 @cli.command()
 @click.argument("ticker")
 def add(ticker: str):
     """Add a stock to the portfolio and backfill 90 days of data."""
     ticker = ticker.upper()
 
-    info = yf.Ticker(ticker).info
-    company_name = info.get("longName") or info.get("shortName") or ticker
+    company_name = _get_company_name(ticker)
 
     with get_sessions() as (local, neon):
         for session in (local, neon):
