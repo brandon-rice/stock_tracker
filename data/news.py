@@ -86,14 +86,20 @@ def _fetch_headlines(ticker: str, limit: int) -> list[dict]:
     try:
         t = yf.Ticker(ticker.upper())
         for article in (t.news or []):
-            url = article.get("link") or article.get("url", "")
+            content = article.get("content") or article
+            headline = content.get("title", "")
+            url = (
+                (content.get("canonicalUrl") or {}).get("url")
+                or (content.get("clickThroughUrl") or {}).get("url")
+                or content.get("link", "")
+            )
+            source = (content.get("provider") or {}).get("displayName") or content.get("publisher", "")
+            pub_raw = content.get("pubDate") or content.get("displayTime")
+            pub_ts = _parse_dt(pub_raw) if pub_raw else (
+                datetime.fromtimestamp(content["providerPublishTime"]) if content.get("providerPublishTime") else None
+            )
             if url and not any(i["url"] == url for i in items):
-                items.append({
-                    "headline": article.get("title", ""),
-                    "url": url,
-                    "source": article.get("publisher", ""),
-                    "published_at": datetime.fromtimestamp(article["providerPublishTime"]) if article.get("providerPublishTime") else None,
-                })
+                items.append({"headline": headline, "url": url, "source": source, "published_at": pub_ts})
     except Exception as e:
         print(f"yfinance news fetch failed: {e}")
 

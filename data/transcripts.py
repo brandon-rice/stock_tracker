@@ -16,6 +16,9 @@ def _get_stock_id(session, ticker: str) -> int:
 def fetch_and_store_transcript(ticker: str, year: int, quarter: int) -> str | None:
     url = f"{FMP_BASE_URL}/earning_call_transcript/{ticker.upper()}"
     resp = requests.get(url, params={"quarter": quarter, "year": year, "apikey": FMP_API_KEY}, timeout=30)
+    if resp.status_code == 403:
+        print("FMP transcript fetch failed: 403 Forbidden. Earnings call transcripts require an FMP paid plan (Starter or above).")
+        return None
     resp.raise_for_status()
     data = resp.json()
 

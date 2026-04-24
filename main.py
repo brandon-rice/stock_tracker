@@ -105,24 +105,30 @@ def list_stocks():
             click.echo(f"{s.ticker:<8} {(s.company_name or ''):<35} {price_str:>10} {chg:>8}")
 
 
+def _get_tickers(ticker_arg):
+    """Return list of ticker strings from DB. Stays inside session so no DetachedInstanceError."""
+    with get_sessions() as (local, _):
+        if ticker_arg:
+            s = local.query(Stock).filter_by(ticker=ticker_arg.upper()).first()
+            return [ticker_arg.upper()] if s else []
+        return [s.ticker for s in local.query(Stock).all()]
+
+
 @cli.command()
 @click.option("--ticker", default=None, help="Fetch for a single ticker (also fetches news)")
 def fetch_prices(ticker):
     """Fetch today's prices and metrics for all stocks (or one)."""
-    with get_sessions() as (local, _):
-        stocks = [local.query(Stock).filter_by(ticker=ticker.upper()).first()] if ticker else local.query(Stock).all()
-
-    for s in stocks:
-        if not s:
-            click.echo(f"Ticker {ticker} not found.")
-            continue
-        click.echo(f"Fetching prices for {s.ticker}...")
-        n = fetch_and_store_prices(s.ticker)
+    tickers = _get_tickers(ticker)
+    if not tickers:
+        click.echo(f"Ticker {ticker} not found." if ticker else "No stocks in portfolio.")
+        return
+    for t in tickers:
+        click.echo(f"Fetching prices for {t}...")
+        n = fetch_and_store_prices(t)
         click.echo(f"  {n} row(s) stored")
-
         if ticker:
-            click.echo(f"Fetching significant news for {s.ticker}...")
-            n = fetch_and_store_news(s.ticker)
+            click.echo(f"Fetching significant news for {t}...")
+            n = fetch_and_store_news(t)
             click.echo(f"  {n} significant article(s) found")
 
 
@@ -130,15 +136,13 @@ def fetch_prices(ticker):
 @click.option("--ticker", default=None)
 def fetch_financials(ticker):
     """Fetch latest quarterly financials for all stocks (or one)."""
-    with get_sessions() as (local, _):
-        stocks = [local.query(Stock).filter_by(ticker=ticker.upper()).first()] if ticker else local.query(Stock).all()
-
-    for s in stocks:
-        if not s:
-            click.echo(f"Ticker {ticker} not found.")
-            continue
-        click.echo(f"Fetching financials for {s.ticker}...")
-        n = fetch_and_store_financials(s.ticker)
+    tickers = _get_tickers(ticker)
+    if not tickers:
+        click.echo(f"Ticker {ticker} not found." if ticker else "No stocks in portfolio.")
+        return
+    for t in tickers:
+        click.echo(f"Fetching financials for {t}...")
+        n = fetch_and_store_financials(t)
         click.echo(f"  {n} quarter(s) stored")
 
 
@@ -146,43 +150,33 @@ def fetch_financials(ticker):
 @click.option("--ticker", default=None)
 def compute_averages(ticker):
     """Compute 30/60/90 day moving averages."""
-    with get_sessions() as (local, _):
-        stocks = [local.query(Stock).filter_by(ticker=ticker.upper()).first()] if ticker else local.query(Stock).all()
-
-    for s in stocks:
-        if not s:
-            continue
-        n = compute_and_store_moving_averages(s.ticker)
-        click.echo(f"{s.ticker}: {n} MA rows computed")
+    tickers = _get_tickers(ticker)
+    for t in tickers:
+        n = compute_and_store_moving_averages(t)
+        click.echo(f"{t}: {n} MA rows computed")
 
 
 @cli.command()
 @click.option("--ticker", default=None)
 def compute_metrics(ticker):
     """Compute YOY/QOQ growth metrics."""
-    with get_sessions() as (local, _):
-        stocks = [local.query(Stock).filter_by(ticker=ticker.upper()).first()] if ticker else local.query(Stock).all()
-
-    for s in stocks:
-        if not s:
-            continue
-        compute_and_store_metrics(s.ticker)
-        click.echo(f"{s.ticker}: metrics computed")
+    tickers = _get_tickers(ticker)
+    for t in tickers:
+        compute_and_store_metrics(t)
+        click.echo(f"{t}: metrics computed")
 
 
 @cli.command()
 @click.option("--ticker", default=None)
 def fetch_news(ticker):
     """Fetch and filter significant news."""
-    with get_sessions() as (local, _):
-        stocks = [local.query(Stock).filter_by(ticker=ticker.upper()).first()] if ticker else local.query(Stock).all()
-
-    for s in stocks:
-        if not s:
-            click.echo(f"Ticker {ticker} not found.")
-            continue
-        click.echo(f"Fetching news for {s.ticker}...")
-        n = fetch_and_store_news(s.ticker)
+    tickers = _get_tickers(ticker)
+    if not tickers:
+        click.echo(f"Ticker {ticker} not found." if ticker else "No stocks in portfolio.")
+        return
+    for t in tickers:
+        click.echo(f"Fetching news for {t}...")
+        n = fetch_and_store_news(t)
         click.echo(f"  {n} significant article(s)")
 
 
