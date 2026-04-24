@@ -8,9 +8,12 @@ from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
 
+SCHEMA = "stock_data"
+
 
 class Stock(Base):
     __tablename__ = "stocks"
+    __table_args__ = {"schema": SCHEMA}
 
     id = Column(Integer, primary_key=True)
     ticker = Column(String(10), unique=True, nullable=False)
@@ -27,10 +30,10 @@ class Stock(Base):
 
 class DailyPrice(Base):
     __tablename__ = "daily_prices"
-    __table_args__ = (UniqueConstraint("stock_id", "date"),)
+    __table_args__ = (UniqueConstraint("stock_id", "date"), {"schema": SCHEMA})
 
     id = Column(Integer, primary_key=True)
-    stock_id = Column(Integer, ForeignKey("stocks.id"), nullable=False)
+    stock_id = Column(Integer, ForeignKey(f"{SCHEMA}.stocks.id"), nullable=False)
     date = Column(Date, nullable=False)
     open = Column(Float)
     high = Column(Float)
@@ -49,10 +52,10 @@ class DailyPrice(Base):
 
 class MovingAverage(Base):
     __tablename__ = "moving_averages"
-    __table_args__ = (UniqueConstraint("stock_id", "date"),)
+    __table_args__ = (UniqueConstraint("stock_id", "date"), {"schema": SCHEMA})
 
     id = Column(Integer, primary_key=True)
-    stock_id = Column(Integer, ForeignKey("stocks.id"), nullable=False)
+    stock_id = Column(Integer, ForeignKey(f"{SCHEMA}.stocks.id"), nullable=False)
     date = Column(Date, nullable=False)
     ma_30 = Column(Float)
     ma_60 = Column(Float)
@@ -63,10 +66,10 @@ class MovingAverage(Base):
 
 class Financials(Base):
     __tablename__ = "financials"
-    __table_args__ = (UniqueConstraint("stock_id", "fiscal_year", "fiscal_quarter"),)
+    __table_args__ = (UniqueConstraint("stock_id", "fiscal_year", "fiscal_quarter"), {"schema": SCHEMA})
 
     id = Column(Integer, primary_key=True)
-    stock_id = Column(Integer, ForeignKey("stocks.id"), nullable=False)
+    stock_id = Column(Integer, ForeignKey(f"{SCHEMA}.stocks.id"), nullable=False)
     fiscal_year = Column(Integer, nullable=False)
     fiscal_quarter = Column(Integer, nullable=False)
     revenue = Column(Float)
@@ -80,10 +83,10 @@ class Financials(Base):
 
 class ComputedMetrics(Base):
     __tablename__ = "computed_metrics"
-    __table_args__ = (UniqueConstraint("stock_id", "computed_date"),)
+    __table_args__ = (UniqueConstraint("stock_id", "computed_date"), {"schema": SCHEMA})
 
     id = Column(Integer, primary_key=True)
-    stock_id = Column(Integer, ForeignKey("stocks.id"), nullable=False)
+    stock_id = Column(Integer, ForeignKey(f"{SCHEMA}.stocks.id"), nullable=False)
     computed_date = Column(Date, nullable=False)
     yoy_revenue_growth = Column(Float)
     yoy_earnings_growth = Column(Float)
@@ -95,10 +98,10 @@ class ComputedMetrics(Base):
 
 class Transcript(Base):
     __tablename__ = "transcripts"
-    __table_args__ = (UniqueConstraint("stock_id", "fiscal_year", "fiscal_quarter"),)
+    __table_args__ = (UniqueConstraint("stock_id", "fiscal_year", "fiscal_quarter"), {"schema": SCHEMA})
 
     id = Column(Integer, primary_key=True)
-    stock_id = Column(Integer, ForeignKey("stocks.id"), nullable=False)
+    stock_id = Column(Integer, ForeignKey(f"{SCHEMA}.stocks.id"), nullable=False)
     fiscal_year = Column(Integer, nullable=False)
     fiscal_quarter = Column(Integer, nullable=False)
     transcript_text = Column(Text)
@@ -110,9 +113,10 @@ class Transcript(Base):
 
 class Sentiment(Base):
     __tablename__ = "sentiment"
+    __table_args__ = {"schema": SCHEMA}
 
     id = Column(Integer, primary_key=True)
-    transcript_id = Column(Integer, ForeignKey("transcripts.id"), unique=True, nullable=False)
+    transcript_id = Column(Integer, ForeignKey(f"{SCHEMA}.transcripts.id"), unique=True, nullable=False)
     overall_score = Column(Float)
     tone_label = Column(String(20))
     key_themes = Column(JSONB)
@@ -126,10 +130,10 @@ class Sentiment(Base):
 
 class News(Base):
     __tablename__ = "news"
-    __table_args__ = (UniqueConstraint("stock_id", "url"),)
+    __table_args__ = (UniqueConstraint("stock_id", "url"), {"schema": SCHEMA})
 
     id = Column(Integer, primary_key=True)
-    stock_id = Column(Integer, ForeignKey("stocks.id"), nullable=False)
+    stock_id = Column(Integer, ForeignKey(f"{SCHEMA}.stocks.id"), nullable=False)
     headline = Column(Text, nullable=False)
     url = Column(Text)
     source = Column(String(100))
@@ -143,6 +147,7 @@ class News(Base):
 
 class QuarterlyReport(Base):
     __tablename__ = "quarterly_reports"
+    __table_args__ = {"schema": SCHEMA}
 
     id = Column(Integer, primary_key=True)
     generated_at = Column(DateTime, default=datetime.utcnow)
