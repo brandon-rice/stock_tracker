@@ -3,7 +3,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-LOCAL_DB_URL = os.environ["LOCAL_DB_URL"]
+# Build local DB URL from individual params
+_host = os.environ["LOCAL_DB_HOST"]
+_port = os.environ.get("LOCAL_DB_PORT", "5432")
+_name = os.environ["LOCAL_DB_NAME"]
+_user = os.environ["LOCAL_DB_USER"]
+_pass = os.environ["LOCAL_DB_PASSWORD"]
+LOCAL_DB_URL = f"postgresql://{_user}:{_pass}@{_host}:{_port}/{_name}"
+
 NEON_DB_URL = os.environ["NEON_DB_URL"]
 FMP_API_KEY = os.environ["FMP_API_KEY"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
