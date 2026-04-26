@@ -121,7 +121,7 @@ def render_html_report(report_data: list[dict]) -> str:
 
                 {sent_html}
 
-                {'<tr><td colspan="2" style="padding:8px 0 2px;font-weight:bold;color:#555">Last 4 Quarters</td></tr>' if financials_rows else ''}
+                {'<tr><td colspan="2" style="padding:8px 0 2px;font-weight:bold;color:#555">Last 5 Quarters</td></tr>' if financials_rows else ''}
                 {'<tr><td colspan="2"><table style="width:100%;font-size:12px;border-collapse:collapse"><tr style="color:#888;border-bottom:1px solid #eee"><td>Quarter</td><td>Revenue</td><td>Net Income</td><td>EPS</td><td>FCF</td><td>YOY Rev</td><td>YOY Earn</td><td>FCF YOY</td><td>FCF QOQ</td></tr>' + financials_rows + '</table></td></tr>' if financials_rows else ''}
 
                 {'<tr><td colspan="2" style="padding:8px 0 2px;font-weight:bold;color:#555">Significant News</td></tr>' if news_html else ''}

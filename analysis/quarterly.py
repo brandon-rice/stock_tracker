@@ -155,9 +155,9 @@ def _stock_snapshot(session, stock) -> dict:
             session.query(Financials)
             .filter_by(stock_id=stock.id)
             .order_by(Financials.fiscal_year.desc(), Financials.fiscal_quarter.desc())
-            .limit(8)
+            .limit(9)
             .all()
-        )[:4],
+        )[:5],
         "data_as_of": {
             "price_date": str(price_row.date) if price_row else None,
             "ma_date": str(ma_row.date) if ma_row else None,

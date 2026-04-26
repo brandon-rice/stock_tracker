@@ -84,15 +84,15 @@ if page == "Portfolio Overview":
                 "FCF YOY": _pct(m.fcf_yoy if m else None),
             })
 
-            # Last 8 quarters needed so 4 displayed quarters can each compute YOY
+            # Last 9 quarters needed so 5 displayed quarters can each compute YOY
             fin_rows = (
                 local.query(Financials)
                 .filter_by(stock_id=s.id)
                 .order_by(Financials.fiscal_year.desc(), Financials.fiscal_quarter.desc())
-                .limit(8)
+                .limit(9)
                 .all()
             )
-            quarterly_by_ticker[ticker] = quarterly_metrics(fin_rows)[:4]
+            quarterly_by_ticker[ticker] = quarterly_metrics(fin_rows)[:5]
 
     if latest_price_date:
         st.caption(f"Latest price data as of: **{latest_price_date}**  |  Loaded: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
@@ -101,7 +101,7 @@ if page == "Portfolio Overview":
     st.dataframe(df, use_container_width=True, hide_index=True)
 
     st.markdown("---")
-    st.subheader("Last 4 Quarters by Stock")
+    st.subheader("Last 5 Quarters by Stock")
 
     for ticker, qrows in quarterly_by_ticker.items():
         if not qrows:
@@ -232,26 +232,35 @@ elif page == "News Feed":
     options = ["All"] + [t for t, _ in stocks]
     selected = st.selectbox("Filter by stock", options)
 
+    news_data = []
+    last_fetch_str = None
     with get_sessions() as (local, _):
         q = local.query(News).filter_by(is_significant=True).order_by(News.published_at.desc())
         if selected != "All":
             s = local.query(Stock).filter_by(ticker=selected).first()
             if s:
                 q = q.filter_by(stock_id=s.id)
-        news_items = q.limit(50).all()
-        last_fetch = local.query(News).order_by(News.fetched_at.desc()).first()
+        for n in q.limit(50).all():
+            news_data.append({
+                "headline": n.headline,
+                "url": n.url,
+                "source": n.source,
+                "published_at": str(n.published_at)[:10] if n.published_at else "",
+                "reason": n.significance_reason or "",
+            })
+        last = local.query(News).order_by(News.fetched_at.desc()).first()
+        if last:
+            last_fetch_str = str(last.fetched_at)[:16]
 
-    if last_fetch:
-        st.caption(f"News last fetched: **{str(last_fetch.fetched_at)[:16]}**")
+    if last_fetch_str:
+        st.caption(f"News last fetched: **{last_fetch_str}**")
 
-    if not news_items:
+    if not news_data:
         st.info("No significant news found yet.")
     else:
-        for n in news_items:
-            with local.no_autoflush:
-                pass
-            st.markdown(f"**[{n.headline}]({n.url})**")
-            st.caption(f"{n.source} · {str(n.published_at)[:10] if n.published_at else ''} · {n.significance_reason or ''}")
+        for n in news_data:
+            st.markdown(f"**[{n['headline']}]({n['url']})**")
+            st.caption(f"{n['source']} · {n['published_at']} · {n['reason']}")
             st.divider()
 
 
@@ -267,6 +276,7 @@ elif page == "Earnings Sentiment":
 
     ticker = st.selectbox("Select Stock", [t for t, _ in stocks])
 
+    sentiments = []
     with get_sessions() as (local, _):
         s = local.query(Stock).filter_by(ticker=ticker).first()
         transcripts = (
@@ -275,14 +285,27 @@ elif page == "Earnings Sentiment":
             .order_by(Transcript.fiscal_year, Transcript.fiscal_quarter)
             .all()
         )
-
-        sentiments = [(t, t.sentiment) for t in transcripts if t.sentiment]
+        for t in transcripts:
+            if t.sentiment:
+                sentiments.append({
+                    "label": f"Q{t.fiscal_quarter} {t.fiscal_year}",
+                    "fiscal_year": t.fiscal_year,
+                    "fiscal_quarter": t.fiscal_quarter,
+                    "fetched_at": str(t.fetched_at)[:16] if t.fetched_at else "",
+                    "score": t.sentiment.overall_score,
+                    "tone": t.sentiment.tone_label,
+                    "confidence": t.sentiment.management_confidence,
+                    "guidance": t.sentiment.guidance_sentiment,
+                    "summary": t.sentiment.summary,
+                    "themes": list(t.sentiment.key_themes or []),
+                    "analyzed_at": str(t.sentiment.analyzed_at)[:16] if t.sentiment.analyzed_at else "",
+                })
 
     if not sentiments:
-        st.info(f"No sentiment data for {ticker}. Run `fetch-transcript` to add some.")
+        st.info(f"No sentiment data for {ticker}. Run `load-transcript {ticker} YEAR Q` to add some.")
     else:
-        labels = [f"Q{t.fiscal_quarter} {t.fiscal_year}" for t, _ in sentiments]
-        scores = [snt.overall_score for _, snt in sentiments]
+        labels = [s["label"] for s in sentiments]
+        scores = [s["score"] for s in sentiments]
 
         fig = go.Figure(go.Bar(
             x=labels, y=scores,
@@ -292,37 +315,42 @@ elif page == "Earnings Sentiment":
         fig.update_layout(title=f"{ticker} Earnings Sentiment Over Time", yaxis_range=[-1, 1], height=300)
         st.plotly_chart(fig, use_container_width=True)
 
-        latest_t, latest_s = sentiments[-1]
-        st.subheader(f"Latest: Q{latest_t.fiscal_quarter} {latest_t.fiscal_year}")
+        latest = sentiments[-1]
+        st.subheader(f"Latest: {latest['label']}")
         st.caption(
-            f"Transcript loaded: **{str(latest_t.fetched_at)[:16]}**  |  "
-            f"Sentiment analyzed: **{str(latest_s.analyzed_at)[:16]}**"
+            f"Transcript loaded: **{latest['fetched_at']}**  |  "
+            f"Sentiment analyzed: **{latest['analyzed_at']}**"
         )
         col1, col2, col3 = st.columns(3)
-        col1.metric("Tone", latest_s.tone_label.title() if latest_s.tone_label else "N/A")
-        col2.metric("Mgmt Confidence", latest_s.management_confidence.title() if latest_s.management_confidence else "N/A")
-        col3.metric("Guidance", latest_s.guidance_sentiment.replace("_", " ").title() if latest_s.guidance_sentiment else "N/A")
+        col1.metric("Tone", latest["tone"].title() if latest["tone"] else "N/A")
+        col2.metric("Mgmt Confidence", latest["confidence"].title() if latest["confidence"] else "N/A")
+        col3.metric("Guidance", latest["guidance"].replace("_", " ").title() if latest["guidance"] else "N/A")
 
-        if latest_s.summary:
-            st.info(latest_s.summary)
-
-        if latest_s.key_themes:
-            st.write("**Key Themes:**", ", ".join(latest_s.key_themes))
+        if latest["summary"]:
+            st.info(latest["summary"])
+        if latest["themes"]:
+            st.write("**Key Themes:**", ", ".join(latest["themes"]))
 
 
 # ── PAGE: Reports ─────────────────────────────────────────────────────────────
 
 elif page == "Reports":
-    st.title("Quarterly Reports")
+    st.title("Portfolio Reports")
 
+    reports_data = []
     with get_sessions() as (local, _):
-        reports = local.query(QuarterlyReport).order_by(QuarterlyReport.generated_at.desc()).limit(20).all()
+        for r in local.query(QuarterlyReport).order_by(QuarterlyReport.generated_at.desc()).limit(20).all():
+            reports_data.append({
+                "generated_at": str(r.generated_at)[:16] if r.generated_at else "?",
+                "sent_at": str(r.sent_at)[:16] if r.sent_at else None,
+                "html": r.report_html,
+            })
 
-    if not reports:
+    if not reports_data:
         st.info("No reports generated yet. Run `python main.py send-report`.")
     else:
-        for r in reports:
-            sent = f"Sent: {str(r.sent_at)[:16]}" if r.sent_at else "Not sent"
-            with st.expander(f"Report — {str(r.generated_at)[:16]} ({sent})"):
-                if r.report_html:
-                    st.components.v1.html(r.report_html, height=600, scrolling=True)
+        for r in reports_data:
+            sent = f"Sent: {r['sent_at']}" if r["sent_at"] else "Not sent"
+            with st.expander(f"Report — {r['generated_at']} ({sent})"):
+                if r["html"]:
+                    st.components.v1.html(r["html"], height=600, scrolling=True)
