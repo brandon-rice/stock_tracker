@@ -3,6 +3,40 @@ from db.connection import get_sessions
 from db.models import Stock, DailyPrice, MovingAverage, Financials, ComputedMetrics, Sentiment, Transcript, News
 
 
+def _pct_change(new, old):
+    if old and old != 0 and new is not None:
+        return round(float((new - old) / abs(old) * 100), 2)
+    return None
+
+
+def quarterly_metrics(financials_rows) -> list[dict]:
+    """Given Financials rows (any order), return per-quarter dicts with YOY/QOQ growth.
+
+    Each dict has: quarter, revenue, net_income, eps, fcf, yoy_revenue,
+    yoy_earnings, fcf_yoy, fcf_qoq. Latest quarter first.
+    """
+    rows = sorted(financials_rows, key=lambda r: (r.fiscal_year, r.fiscal_quarter), reverse=True)
+    out = []
+    for i, r in enumerate(rows):
+        prior_year = next(
+            (x for x in rows[i + 1:] if x.fiscal_year == r.fiscal_year - 1 and x.fiscal_quarter == r.fiscal_quarter),
+            None,
+        )
+        prior_q = rows[i + 1] if i + 1 < len(rows) else None
+        out.append({
+            "quarter": f"Q{r.fiscal_quarter} {r.fiscal_year}",
+            "revenue": r.revenue,
+            "net_income": r.net_income,
+            "eps": r.eps,
+            "fcf": r.free_cash_flow,
+            "yoy_revenue": _pct_change(r.revenue, prior_year.revenue if prior_year else None),
+            "yoy_earnings": _pct_change(r.net_income, prior_year.net_income if prior_year else None),
+            "fcf_yoy": _pct_change(r.free_cash_flow, prior_year.free_cash_flow if prior_year else None),
+            "fcf_qoq": _pct_change(r.free_cash_flow, prior_q.free_cash_flow if prior_q else None),
+        })
+    return out
+
+
 def generate_report_data(tickers: list[str] | None = None) -> list[dict]:
     with get_sessions() as (local, _neon):
         if tickers:
@@ -117,6 +151,19 @@ def _stock_snapshot(session, stock) -> dict:
             }
             for r in fin_rows
         ],
+        "quarterly_breakdown": quarterly_metrics(
+            session.query(Financials)
+            .filter_by(stock_id=stock.id)
+            .order_by(Financials.fiscal_year.desc(), Financials.fiscal_quarter.desc())
+            .limit(8)
+            .all()
+        )[:4],
+        "data_as_of": {
+            "price_date": str(price_row.date) if price_row else None,
+            "ma_date": str(ma_row.date) if ma_row else None,
+            "financials_reported": str(fin_rows[0].reported_date) if fin_rows and fin_rows[0].reported_date else None,
+            "sentiment_analyzed": str(sentiment.analyzed_at)[:16] if sentiment else None,
+        },
         "metrics": {
             "yoy_revenue_growth": metrics_row.yoy_revenue_growth if metrics_row else None,
             "yoy_earnings_growth": metrics_row.yoy_earnings_growth if metrics_row else None,

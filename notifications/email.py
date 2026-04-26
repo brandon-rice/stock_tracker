@@ -20,7 +20,7 @@ def _pct(val):
 
 
 def render_html_report(report_data: list[dict]) -> str:
-    now = datetime.now().strftime("%B %d, %Y")
+    now = datetime.now().strftime("%B %d, %Y at %I:%M %p")
     cards = ""
 
     for s in report_data:
@@ -57,26 +57,39 @@ def render_html_report(report_data: list[dict]) -> str:
             <tr><td colspan="2" style="color:#555;font-style:italic;padding:4px 0">{sent['summary']}</td></tr>
             """
 
+        qbreakdown = s.get("quarterly_breakdown") or []
         financials_rows = ""
-        for f in s.get("financials", []):
+        for q in qbreakdown:
             financials_rows += f"""
             <tr>
-                <td>Q{f['fiscal_quarter']} {f['fiscal_year']}</td>
-                <td>{_fmt(f['revenue'] and f['revenue']/1e9, suffix='B', prefix='$')}</td>
-                <td>{_fmt(f['net_income'] and f['net_income']/1e9, suffix='B', prefix='$')}</td>
-                <td>{_fmt(f['free_cash_flow'] and f['free_cash_flow']/1e9, suffix='B', prefix='$')}</td>
+                <td>{q['quarter']}</td>
+                <td>{_fmt(q['revenue'] and q['revenue']/1e9, suffix='B', prefix='$')}</td>
+                <td>{_fmt(q['net_income'] and q['net_income']/1e9, suffix='B', prefix='$')}</td>
+                <td>{_fmt(q['eps'], prefix='$')}</td>
+                <td>{_fmt(q['fcf'] and q['fcf']/1e9, suffix='B', prefix='$')}</td>
+                <td>{_pct(q['yoy_revenue'])}</td>
+                <td>{_pct(q['yoy_earnings'])}</td>
+                <td>{_pct(q['fcf_yoy'])}</td>
+                <td>{_pct(q['fcf_qoq'])}</td>
             </tr>"""
+
+        asof = s.get("data_as_of") or {}
+        refresh_lines = []
+        if asof.get("price_date"): refresh_lines.append(f"Price: {asof['price_date']}")
+        if asof.get("financials_reported"): refresh_lines.append(f"Financials: {asof['financials_reported']}")
+        if asof.get("sentiment_analyzed"): refresh_lines.append(f"Sentiment: {asof['sentiment_analyzed']}")
+        refresh_html = " · ".join(refresh_lines)
 
         cards += f"""
         <div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:20px;margin-bottom:24px">
             <h2 style="margin:0 0 4px;color:#2c3e50">{s['ticker']}
                 <span style="font-size:14px;font-weight:normal;color:#888">{s.get('company_name','')}</span>
             </h2>
-            <p style="margin:0 0 12px;font-size:22px;font-weight:bold;color:#2c3e50">
+            <p style="margin:0 0 4px;font-size:22px;font-weight:bold;color:#2c3e50">
                 {_fmt(p.get('close'), prefix='$')}
                 <span style="font-size:15px;margin-left:8px">{_pct(p.get('change_pct'))}</span>
-                <span style="font-size:12px;color:#888;margin-left:8px">as of {p.get('date','')}</span>
             </p>
+            <p style="margin:0 0 12px;font-size:11px;color:#888">Data as of — {refresh_html}</p>
 
             <table style="width:100%;border-collapse:collapse;font-size:14px">
                 <tr style="background:#f8f8f8">
@@ -108,9 +121,8 @@ def render_html_report(report_data: list[dict]) -> str:
 
                 {sent_html}
 
-                {'<tr><td colspan="2" style="padding:8px 0 2px;font-weight:bold;color:#555">Quarterly Financials</td></tr>' if financials_rows else ''}
-                {'<tr style="font-size:12px;color:#888"><td>Quarter</td><td>Revenue</td><td>Net Income</td><td>Free Cash Flow</td></tr>' if financials_rows else ''}
-                {financials_rows}
+                {'<tr><td colspan="2" style="padding:8px 0 2px;font-weight:bold;color:#555">Last 4 Quarters</td></tr>' if financials_rows else ''}
+                {'<tr><td colspan="2"><table style="width:100%;font-size:12px;border-collapse:collapse"><tr style="color:#888;border-bottom:1px solid #eee"><td>Quarter</td><td>Revenue</td><td>Net Income</td><td>EPS</td><td>FCF</td><td>YOY Rev</td><td>YOY Earn</td><td>FCF YOY</td><td>FCF QOQ</td></tr>' + financials_rows + '</table></td></tr>' if financials_rows else ''}
 
                 {'<tr><td colspan="2" style="padding:8px 0 2px;font-weight:bold;color:#555">Significant News</td></tr>' if news_html else ''}
                 {'<tr><td colspan="2">' + news_html + '</td></tr>' if news_html else ''}
@@ -121,9 +133,10 @@ def render_html_report(report_data: list[dict]) -> str:
 <html><head><meta charset="utf-8"></head>
 <body style="font-family:Arial,sans-serif;background:#f5f5f5;padding:24px;color:#333">
     <div style="max-width:800px;margin:0 auto">
-        <h1 style="color:#2c3e50;border-bottom:2px solid #3498db;padding-bottom:8px">
-            Portfolio Report — {now}
+        <h1 style="color:#2c3e50;border-bottom:2px solid #3498db;padding-bottom:8px;margin-bottom:4px">
+            Portfolio Report
         </h1>
+        <p style="color:#888;font-size:13px;margin:0 0 24px">Generated: {now}</p>
         {cards}
         <p style="font-size:12px;color:#aaa;text-align:center;margin-top:24px">
             Generated by Stock Portfolio Tracker

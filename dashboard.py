@@ -2,9 +2,10 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from db.connection import get_sessions
 from db.models import Stock, DailyPrice, MovingAverage, Financials, ComputedMetrics, Sentiment, Transcript, News, QuarterlyReport
+from analysis.quarterly import quarterly_metrics
 
 st.set_page_config(page_title="Stock Portfolio Tracker", layout="wide", page_icon="📈")
 
@@ -47,6 +48,9 @@ if page == "Portfolio Overview":
         st.stop()
 
     rows = []
+    quarterly_by_ticker = {}
+    latest_price_date = None
+
     with get_sessions() as (local, _):
         for ticker, name in stocks:
             s = local.query(Stock).filter_by(ticker=ticker).first()
@@ -58,6 +62,9 @@ if page == "Portfolio Overview":
             chg = None
             if p and prev and prev.close:
                 chg = (p.close - prev.close) / prev.close * 100
+
+            if p and (latest_price_date is None or p.date > latest_price_date):
+                latest_price_date = p.date
 
             rows.append({
                 "Ticker": ticker,
@@ -77,8 +84,41 @@ if page == "Portfolio Overview":
                 "FCF YOY": _pct(m.fcf_yoy if m else None),
             })
 
+            # Last 8 quarters needed so 4 displayed quarters can each compute YOY
+            fin_rows = (
+                local.query(Financials)
+                .filter_by(stock_id=s.id)
+                .order_by(Financials.fiscal_year.desc(), Financials.fiscal_quarter.desc())
+                .limit(8)
+                .all()
+            )
+            quarterly_by_ticker[ticker] = quarterly_metrics(fin_rows)[:4]
+
+    if latest_price_date:
+        st.caption(f"Latest price data as of: **{latest_price_date}**  |  Loaded: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+
     df = pd.DataFrame(rows)
     st.dataframe(df, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+    st.subheader("Last 4 Quarters by Stock")
+
+    for ticker, qrows in quarterly_by_ticker.items():
+        if not qrows:
+            continue
+        with st.expander(f"{ticker} — Quarterly Detail"):
+            qdf = pd.DataFrame([{
+                "Quarter": q["quarter"],
+                "Revenue": _fmt(q["revenue"] / 1e9, prefix="$", suffix="B") if q["revenue"] else "N/A",
+                "Net Income": _fmt(q["net_income"] / 1e9, prefix="$", suffix="B") if q["net_income"] else "N/A",
+                "EPS": _fmt(q["eps"]) if q["eps"] else "N/A",
+                "FCF": _fmt(q["fcf"] / 1e9, prefix="$", suffix="B") if q["fcf"] else "N/A",
+                "YOY Rev": _pct(q["yoy_revenue"]),
+                "YOY Earn": _pct(q["yoy_earnings"]),
+                "FCF YOY": _pct(q["fcf_yoy"]),
+                "FCF QOQ": _pct(q["fcf_qoq"]),
+            } for q in qrows])
+            st.dataframe(qdf, use_container_width=True, hide_index=True)
 
 
 # ── PAGE: Stock Detail ────────────────────────────────────────────────────────
@@ -95,6 +135,16 @@ elif page == "Stock Detail":
 
     with get_sessions() as (local, _):
         s = local.query(Stock).filter_by(ticker=ticker).first()
+
+        latest_p = local.query(DailyPrice).filter_by(stock_id=s.id).order_by(DailyPrice.date.desc()).first()
+        latest_fin = local.query(Financials).filter_by(stock_id=s.id).order_by(Financials.reported_date.desc()).first()
+        info_lines = []
+        if latest_p:
+            info_lines.append(f"Price as of: **{latest_p.date}**")
+        if latest_fin and latest_fin.reported_date:
+            info_lines.append(f"Financials reported: **{latest_fin.reported_date}**")
+        if info_lines:
+            st.caption("  |  ".join(info_lines))
 
         # Price + MA chart
         cutoff = date.today() - timedelta(days=95)
@@ -189,6 +239,10 @@ elif page == "News Feed":
             if s:
                 q = q.filter_by(stock_id=s.id)
         news_items = q.limit(50).all()
+        last_fetch = local.query(News).order_by(News.fetched_at.desc()).first()
+
+    if last_fetch:
+        st.caption(f"News last fetched: **{str(last_fetch.fetched_at)[:16]}**")
 
     if not news_items:
         st.info("No significant news found yet.")
@@ -240,6 +294,10 @@ elif page == "Earnings Sentiment":
 
         latest_t, latest_s = sentiments[-1]
         st.subheader(f"Latest: Q{latest_t.fiscal_quarter} {latest_t.fiscal_year}")
+        st.caption(
+            f"Transcript loaded: **{str(latest_t.fetched_at)[:16]}**  |  "
+            f"Sentiment analyzed: **{str(latest_s.analyzed_at)[:16]}**"
+        )
         col1, col2, col3 = st.columns(3)
         col1.metric("Tone", latest_s.tone_label.title() if latest_s.tone_label else "N/A")
         col2.metric("Mgmt Confidence", latest_s.management_confidence.title() if latest_s.management_confidence else "N/A")
