@@ -7,6 +7,7 @@ from db.models import Stock, DailyPrice, MovingAverage, ComputedMetrics, Financi
 from data.prices import fetch_and_store_prices, backfill_prices
 from data.financials import fetch_and_store_financials
 from data.transcripts import fetch_and_store_transcript, load_transcript_from_file
+from data.sec_edgar import backfill_from_sec
 from data.news import fetch_and_store_news
 from analysis.moving_averages import compute_and_store_moving_averages
 from analysis.metrics import compute_and_store_metrics
@@ -58,9 +59,16 @@ def add(ticker: str):
     n = backfill_prices(ticker, days=90)
     click.echo(f"  Stored {n} price rows")
 
-    click.echo("Fetching financials...")
+    click.echo("Fetching recent financials (yfinance)...")
     n = fetch_and_store_financials(ticker)
     click.echo(f"  Stored {n} quarterly financials")
+
+    click.echo("Backfilling historical financials (SEC EDGAR)...")
+    try:
+        n = backfill_from_sec(ticker)
+        click.echo(f"  Backfilled {n} quarters from SEC")
+    except Exception as e:
+        click.echo(f"  SEC backfill failed: {e}")
 
     click.echo("Computing moving averages...")
     compute_and_store_moving_averages(ticker)
@@ -144,6 +152,23 @@ def fetch_financials(ticker):
         click.echo(f"Fetching financials for {t}...")
         n = fetch_and_store_financials(t)
         click.echo(f"  {n} quarter(s) stored")
+
+
+@cli.command("backfill-financials")
+@click.option("--ticker", default=None)
+def backfill_financials(ticker):
+    """Backfill multi-year quarterly financials from SEC EDGAR (free)."""
+    tickers = _get_tickers(ticker)
+    if not tickers:
+        click.echo(f"Ticker {ticker} not found." if ticker else "No stocks in portfolio.")
+        return
+    for t in tickers:
+        click.echo(f"Backfilling {t} from SEC EDGAR...")
+        try:
+            n = backfill_from_sec(t)
+            click.echo(f"  {n} quarter(s) backfilled")
+        except Exception as e:
+            click.echo(f"  failed: {e}")
 
 
 @cli.command()
