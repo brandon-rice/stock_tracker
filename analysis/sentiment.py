@@ -78,11 +78,17 @@ def _call_claude(transcript_text: str) -> dict | None:
     try:
         msg = _claude.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=1024,
+            max_tokens=2048,
             messages=[{"role": "user", "content": _PROMPT.format(transcript=text)}],
         )
         raw = msg.content[0].text.strip()
-        return json.loads(raw)
+        # Extract JSON object even if wrapped in markdown fences or prose
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start < 0 or end <= start:
+            print(f"Claude returned no JSON object. Response: {raw[:300]}")
+            return None
+        return json.loads(raw[start:end])
     except Exception as e:
         print(f"Claude sentiment analysis failed: {e}")
         return None
