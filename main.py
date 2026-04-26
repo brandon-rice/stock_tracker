@@ -6,7 +6,7 @@ from db.connection import get_sessions
 from db.models import Stock, DailyPrice, MovingAverage, ComputedMetrics, Financials, News
 from data.prices import fetch_and_store_prices, backfill_prices
 from data.financials import fetch_and_store_financials
-from data.transcripts import fetch_and_store_transcript
+from data.transcripts import fetch_and_store_transcript, load_transcript_from_file
 from data.news import fetch_and_store_news
 from analysis.moving_averages import compute_and_store_moving_averages
 from analysis.metrics import compute_and_store_metrics
@@ -185,7 +185,7 @@ def fetch_news(ticker):
 @click.argument("year", type=int)
 @click.argument("quarter", type=int)
 def fetch_transcript(ticker, year, quarter):
-    """Fetch earnings transcript and run sentiment analysis. E.g.: fetch-transcript AAPL 2024 4"""
+    """Fetch transcript from FMP API (paid plan required). E.g.: fetch-transcript AAPL 2024 4"""
     click.echo(f"Fetching transcript for {ticker.upper()} Q{quarter} {year}...")
     text = fetch_and_store_transcript(ticker, year, quarter)
     if text:
@@ -196,6 +196,28 @@ def fetch_transcript(ticker, year, quarter):
             click.echo(f"  Tone: {result['tone_label']} (score: {result['overall_score']:+.2f})")
             click.echo(f"  Guidance: {result['guidance_sentiment']}")
             click.echo(f"  Summary: {result['summary']}")
+
+
+@cli.command("load-transcript")
+@click.argument("ticker")
+@click.argument("year", type=int)
+@click.argument("quarter", type=int)
+def load_transcript(ticker, year, quarter):
+    """Load transcript from local file and run sentiment. E.g.: load-transcript AAPL 2025 4
+
+    Reads from $TRANSCRIPTS_DIR/{TICKER}/{YEAR}_Q{N}.md
+    """
+    text = load_transcript_from_file(ticker, year, quarter)
+    if not text:
+        return
+    click.echo("Running sentiment analysis...")
+    result = analyze_and_store_sentiment(ticker, year, quarter)
+    if result:
+        click.echo(f"  Tone: {result['tone_label']} (score: {result['overall_score']:+.2f})")
+        click.echo(f"  Guidance: {result['guidance_sentiment']}")
+        click.echo(f"  Confidence: {result['management_confidence']}")
+        click.echo(f"  Themes: {', '.join(result.get('key_themes', []))}")
+        click.echo(f"  Summary: {result['summary']}")
 
 
 @cli.command()

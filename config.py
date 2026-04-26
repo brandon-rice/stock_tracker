@@ -19,5 +19,10 @@ GMAIL_USER = os.environ["GMAIL_USER"]
 GMAIL_APP_PASSWORD = os.environ["GMAIL_APP_PASSWORD"]
 REPORT_RECIPIENT_EMAIL = os.environ.get("REPORT_RECIPIENT_EMAIL", GMAIL_USER)
 
+TRANSCRIPTS_DIR = os.environ.get(
+    "TRANSCRIPTS_DIR",
+    str(Path.home() / "Documents" / "earnings_transcripts"),
+)
+
 FMP_BASE_URL = "https://financialmodelingprep.com/api/v3"
 PRICE_BACKFILL_DAYS = 90
