@@ -246,11 +246,13 @@ def load_transcript(ticker, year, quarter):
 
 
 @cli.command()
-def portfolio_summary():
-    """Print a full portfolio summary to the terminal."""
-    report = generate_report_data()
+@click.option("--ticker", default=None, help="Limit summary to a single ticker")
+def portfolio_summary(ticker):
+    """Print a full portfolio summary to the terminal. Use --ticker to drill into one stock."""
+    tickers = [ticker.upper()] if ticker else None
+    report = generate_report_data(tickers=tickers)
     if not report:
-        click.echo("No stocks in portfolio.")
+        click.echo(f"No data for {ticker}." if ticker else "No stocks in portfolio.")
         return
 
     for s in report:
