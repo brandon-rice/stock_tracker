@@ -17,33 +17,36 @@ The `.env` file must exist at the project root (copy from `.env.example`). `conf
 
 ```bash
 # Database
-python main.py init-db                        # Create stock_data schema + all tables on both DBs
+python main.py init-db                        # Create database + stock_data schema + tables on both DBs
 
 # Portfolio management
-python main.py add <TICKER>                   # Add stock + backfill 90 days prices/financials
+python main.py add <TICKER>                   # Add stock + backfill prices + yfinance + SEC EDGAR financials
 python main.py remove <TICKER>                # Remove stock and all associated data
-python main.py list                           # List portfolio with latest prices
+python main.py list                           # Quick list with latest prices
 
 # Daily data
 python main.py fetch-prices                   # All stocks
-python main.py fetch-prices --ticker AAPL     # Single stock (also fetches news)
-python main.py fetch-financials [--ticker X]
+python main.py fetch-prices --ticker AAPL     # Single stock (also fetches news for that ticker)
+python main.py fetch-financials [--ticker X]  # Latest 4-5 quarters from yfinance
+python main.py backfill-financials [--ticker X]  # Multi-year history from SEC EDGAR (free)
 python main.py compute-averages [--ticker X]  # 30/60/90-day MAs
-python main.py compute-metrics [--ticker X]   # YOY/QOQ growth rates
+python main.py compute-metrics [--ticker X]   # YOY/QOQ growth (latest quarter snapshot only)
 python main.py fetch-news [--ticker X]
 
-# Earnings (requires FMP paid plan)
-python main.py fetch-transcript AAPL 2025 1   # Fetches + runs sentiment automatically
+# Earnings transcripts
+python main.py load-transcript AAPL 2025 4    # Load from local file (preferred — no FMP plan needed)
+python main.py fetch-transcript AAPL 2025 4   # Fetch from FMP (paid plan required)
 
 # Reports
-python main.py portfolio-summary              # Terminal output
-python main.py send-report                    # Generate + email HTML report
+python main.py portfolio-summary              # All stocks, terminal output
+python main.py portfolio-summary --ticker AAPL  # Drill into one stock
+python main.py send-report                    # Generate + email full HTML report
 
 # Dashboard
-streamlit run dashboard.py
+streamlit run dashboard.py                    # Local web UI on localhost:8501
 
-# Scheduler (runs daily + quarterly jobs automatically)
-python main.py start-scheduler
+# Scheduler
+python main.py start-scheduler                # Long-running daemon for daily + quarterly jobs
 ```
 
 ## Architecture
@@ -51,39 +54,80 @@ python main.py start-scheduler
 ### Dual-database write pattern
 Every write goes to both local PostgreSQL and Neon cloud simultaneously via `db/connection.py:get_sessions()`. This context manager yields `(local_session, neon_session)` and commits or rolls back both atomically. **Never write to only one DB** — always use `get_sessions()`.
 
-ORM objects must **not** be accessed after the `with get_sessions()` block closes — they become detached. Extract plain Python values (strings, ints) inside the `with` block before the loop that uses them. See `_get_tickers()` in `main.py` for the established pattern.
+ORM objects must **not** be accessed after the `with get_sessions()` block closes — they become detached and raise `DetachedInstanceError`. Extract plain Python values (strings, ints, dicts) inside the `with` block before any loop or rendering that uses them. Established patterns:
+- `_get_tickers()` in `main.py` for list-of-strings extraction
+- The `news_data`, `sentiments`, `reports_data` patterns in `dashboard.py`
 
 ### Schema
-All tables live in the `stock_data` PostgreSQL schema (not `public`). The constant `SCHEMA = "stock_data"` is defined in `db/models.py` and referenced in all `ForeignKey()` definitions as `f"{SCHEMA}.table_name"`.
+All tables live in the `stock_data` PostgreSQL schema (not `public`). The constant `SCHEMA = "stock_data"` is defined in `db/models.py` and referenced in all `ForeignKey()` definitions as `f"{SCHEMA}.table_name"`. `db/init_db.py` creates the database (if missing on local), the schema, and all tables.
 
 ### Data flow
 ```
-yfinance → data/prices.py, data/financials.py
-FMP API  → data/transcripts.py (paid plan required), data/news.py (paid plan required)
-yfinance → data/news.py (free fallback for news)
-                ↓
-         db/models.py (upsert via ON CONFLICT DO UPDATE)
-                ↓
-    analysis/moving_averages.py  (reads daily_prices, writes moving_averages)
-    analysis/metrics.py          (reads financials, writes computed_metrics)
-    analysis/sentiment.py        (reads transcripts, calls Claude API, writes sentiment)
-    analysis/quarterly.py        (reads all tables, assembles report dict)
-                ↓
+yfinance        → data/prices.py        (daily OHLCV, PE, EPS, 52W high/low, debt/equity)
+yfinance        → data/financials.py    (latest 4-5 quarters)
+SEC EDGAR XBRL  → data/sec_edgar.py     (multi-year quarterly history — primary source)
+yfinance        → data/news.py          (news headlines — free fallback)
+FMP API         → data/news.py          (paid plan only)
+FMP API         → data/transcripts.py   (paid plan only)
+Local .md/.txt  → data/transcripts.py   (load_transcript_from_file — manual workflow)
+                          ↓
+                  db/models.py (upsert via ON CONFLICT DO UPDATE)
+                          ↓
+    analysis/moving_averages.py  (reads daily_prices,  writes moving_averages)
+    analysis/metrics.py          (reads financials,    writes computed_metrics — latest only)
+    analysis/quarterly.py        (reads everything,    has quarterly_metrics() helper for
+                                                       per-quarter YOY/QOQ on the fly)
+    analysis/sentiment.py        (reads transcripts,   calls Claude API, writes sentiment)
+                          ↓
     notifications/email.py       (renders HTML, sends via Gmail SMTP)
-    dashboard.py                 (Streamlit, reads from local DB only)
+    dashboard.py                 (Streamlit, reads local DB only)
 ```
 
-### numpy type handling
-yfinance 1.x returns `numpy.float64` values. psycopg2 cannot serialize these — always cast to `float()` before inserting into the DB. The helper `_f(v)` in `data/prices.py` is the established pattern. Apply the same to any new numeric values coming from yfinance or pandas.
+### Historical financials strategy
+- `yfinance` only returns ~5 quarters; insufficient for YOY calculations on most quarters
+- `SEC EDGAR` (`data/sec_edgar.py`) is the primary source for historical data — free, official, 16+ years per company
+- Always run `backfill-financials` after `add` (the `add` command does this automatically)
+- Critical filter: `_is_single_quarter()` excludes YTD-cumulative XBRL entries (must be ~80-100 days duration). Without this, revenue/income values include 6-month and 9-month cumulative totals.
+- Q4 is often missing from 10-Q filings; `_extract_quarterly_q4_from_annual()` derives it as `FY - (Q1+Q2+Q3)` from 10-K filings
+- SEC requires real contact info in `User-Agent` header — uses `REPORT_RECIPIENT_EMAIL` from config
 
-### FMP API tier limitations
-- **Free tier**: financial statements, company profiles only
-- **Starter plan (~$14.99/mo)**: unlocks `stock_news` and `earning_call_transcript` endpoints
-- News falls back to yfinance (free) when FMP returns 403
-- Transcripts return `None` gracefully on 403 with a clear message
+### numpy type handling
+yfinance 1.x and pandas operations return `numpy.float64` values. psycopg2 cannot serialize these — it interprets the type prefix as a schema name (`schema "np" does not exist`). **Always cast to `float()` before inserting into the DB**. Established patterns:
+- `_f(v)` helper in `data/prices.py`
+- `float(round(...))` in `analysis/moving_averages.py` and `analysis/metrics.py`
 
 ### Claude API usage
-`analysis/sentiment.py` and `data/news.py` both instantiate `anthropic.Anthropic` at module load time. Sentiment analysis truncates transcripts to 40,000 characters before sending. The model used is `claude-sonnet-4-6`.
+`analysis/sentiment.py` and `data/news.py` both instantiate `anthropic.Anthropic` at module load time. Model is `claude-sonnet-4-6`. `max_tokens=2048` for sentiment, `1024` for news filtering.
+
+**JSON parsing pattern**: Claude sometimes wraps JSON in markdown fences or explanatory prose. Both modules use the same extraction approach: find the first `{` (or `[`) and the last matching `}` (or `]`), then `json.loads()` that substring. Never call `json.loads()` directly on the raw response.
+
+Sentiment analysis truncates transcripts to 40,000 characters before sending.
+
+### FMP API status (free tier is severely limited)
+- Even `profile`, `income-statement`, `cash-flow-statement`, `stock_news` return 402/403 on the free tier
+- Free tier is essentially unusable for this project's needs
+- Transcripts and news both fail gracefully with informative messages
+- News falls back to yfinance (works free); transcripts fall back to local file loading via `load-transcript`
+
+### Earnings transcripts (manual workflow)
+Save transcripts as `$TRANSCRIPTS_DIR/{TICKER}/{YEAR}_Q{N}.md` (or `.txt`). Default `TRANSCRIPTS_DIR` is `~/Documents/earnings_transcripts`. The `load-transcript` command:
+1. Looks up the file (case-insensitive ticker folder)
+2. Stores the raw text in `transcripts` table on both DBs
+3. Calls `analyze_and_store_sentiment()` which sends to Claude
+4. Writes structured sentiment back to the `sentiment` table on both DBs
 
 ### Scheduler
-`scheduler.py` runs two APScheduler jobs: daily prices/news/MAs at 5 PM ET on weekdays, and quarterly reports on the 1st of Jan/Apr/Jul/Oct. Run as a long-lived process with `python main.py start-scheduler`.
+`scheduler.py` runs two APScheduler jobs:
+- **Daily** (weekdays 5 PM ET): prices + news + recompute MAs for every stock
+- **Quarterly** (1st of Jan/Apr/Jul/Oct, 6 AM ET): financials + metrics + email report
+
+Run as a long-lived process with `python main.py start-scheduler`. There is no scheduled job for transcripts/sentiment — those are manually triggered after the user saves a transcript file.
+
+### Dashboard refresh date convention
+Every Streamlit page surfaces a "data as of" caption from the underlying table's timestamp:
+- Portfolio Overview → latest `daily_prices.date`
+- Stock Detail → `daily_prices.date` + `financials.reported_date`
+- News Feed → max(`news.fetched_at`)
+- Earnings Sentiment → `transcripts.fetched_at` + `sentiment.analyzed_at`
+
+Maintain this pattern when adding new pages or sections.
