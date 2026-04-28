@@ -87,9 +87,16 @@ Local .md/.txt  → data/transcripts.py   (load_transcript_from_file — manual 
 - `yfinance` only returns ~5 quarters; insufficient for YOY calculations on most quarters
 - `SEC EDGAR` (`data/sec_edgar.py`) is the primary source for historical data — free, official, 16+ years per company
 - Always run `backfill-financials` after `add` (the `add` command does this automatically)
-- Critical filter: `_is_single_quarter()` excludes YTD-cumulative XBRL entries (must be ~80-100 days duration). Without this, revenue/income values include 6-month and 9-month cumulative totals.
-- Q4 is often missing from 10-Q filings; `_extract_quarterly_q4_from_annual()` derives it as `FY - (Q1+Q2+Q3)` from 10-K filings
 - SEC requires real contact info in `User-Agent` header — uses `REPORT_RECIPIENT_EMAIL` from config
+
+**XBRL extraction gotchas** (each was a real bug — don't undo these):
+- `_is_single_quarter()` filters to ~80-100 day duration entries — XBRL data also contains 6-month, 9-month, and 12-month YTD cumulative totals that look like quarterly entries via the `fp` field. Without this filter, revenue values get summed across periods.
+- Quarter dedup is by **end_date** (calendar period), not the `fy`/`fp` tags. The `fy`/`fp` tags reflect which filing the entry appeared in, not the period it represents — comparison columns in 10-Qs share the filing's `fy`/`fp`.
+- Among entries for the same calendar period, **prefer those whose `frame` matches `CY{year}Q{q}`** — the canonical frame is set on the single-quarter entry and absent on YTD-cumulative duplicates from the same filing.
+- `_extract_concept()` **merges across all listed concepts** — Apple uses different XBRL tags in different years (`SalesRevenueNet` pre-2018, `Revenues` briefly, then `RevenueFromContractWithCustomerExcludingAssessedTax`). Picking just the first concept with data gives stale historical values.
+- Insurance/financial companies (Cigna) report quarterly net income under `NetIncomeLossAvailableToCommonStockholdersBasic`, not `NetIncomeLoss` (which is annual-only for them). The fallback list handles this.
+- `_extract_quarterly_q4_from_annual()` derives the **fiscal-year-end quarter** from FY totals — for Apple this is calendar Q3, not Q4 (their FY ends in September). Uses the FY entry's end_date to determine the target calendar quarter.
+- All quarter labels are **calendar quarters**, matching yfinance's labeling. AAPL's "fiscal Q1 2026" is stored as calendar Q4 2025 (the holiday quarter).
 
 ### numpy type handling
 yfinance 1.x and pandas operations return `numpy.float64` values. psycopg2 cannot serialize these — it interprets the type prefix as a schema name (`schema "np" does not exist`). **Always cast to `float()` before inserting into the DB**. Established patterns:

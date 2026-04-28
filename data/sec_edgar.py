@@ -13,14 +13,20 @@ from config import REPORT_RECIPIENT_EMAIL
 
 USER_AGENT = f"Brandon Rice Stock Tracker {REPORT_RECIPIENT_EMAIL}"
 
-# Fallback concept lists — different companies use different XBRL tags
+# Concepts to try for each metric — order matters. Try the broadest aggregate
+# concepts first so insurance/financial companies that don't use the
+# RevenueFromContractWithCustomer tags are handled correctly.
 REVENUE_CONCEPTS = [
+    "Revenues",
     "RevenueFromContractWithCustomerExcludingAssessedTax",
     "RevenueFromContractWithCustomerIncludingAssessedTax",
-    "Revenues",
     "SalesRevenueNet",
 ]
-NET_INCOME_CONCEPTS = ["NetIncomeLoss"]
+NET_INCOME_CONCEPTS = [
+    "NetIncomeLoss",
+    "NetIncomeLossAvailableToCommonStockholdersBasic",
+    "NetIncomeLossIncludingPortionAttributableToNonredeemableNoncontrollingInterest",
+]
 EPS_CONCEPTS = ["EarningsPerShareDiluted", "EarningsPerShareBasic"]
 OCF_CONCEPTS = [
     "NetCashProvidedByUsedInOperatingActivities",
@@ -69,8 +75,26 @@ def _is_single_quarter(row: dict) -> bool:
         return False
 
 
+def _calendar_period(row: dict) -> tuple[int, int] | None:
+    """Returns (year, quarter) for the calendar period this entry covers, from end_date."""
+    end = row.get("end")
+    if not end:
+        return None
+    try:
+        d = datetime.fromisoformat(end)
+        return (d.year, (d.month - 1) // 3 + 1)
+    except Exception:
+        return None
+
+
 def _extract_concept(us_gaap: dict, concepts: list[str], duration: str = "quarter") -> dict[tuple[int, int], float]:
-    """Returns {(fy, q): value}. duration='quarter' filters to ~3-month periods."""
+    """Returns {(year, q): value}. Dedups by calendar period (from end_date) and
+    prefers entries whose `frame` matches the canonical CY{year}Q{q} tag.
+
+    Merges across all listed concepts because companies sometimes split data
+    across XBRL tags over time (e.g., AAPL used SalesRevenueNet pre-2018,
+    Revenues briefly, then RevenueFromContractWithCustomerExcludingAssessedTax)."""
+    result: dict[tuple[int, int], dict] = {}
     for c in concepts:
         if c not in us_gaap:
             continue
@@ -78,23 +102,33 @@ def _extract_concept(us_gaap: dict, concepts: list[str], duration: str = "quarte
         unit_key = next((k for k in units if k.startswith("USD")), None)
         if not unit_key:
             continue
-        result = {}
         for row in units[unit_key]:
-            fy, fp = row.get("fy"), row.get("fp")
-            if fp not in ("Q1", "Q2", "Q3", "Q4"):
-                continue
             if duration == "quarter" and not _is_single_quarter(row):
                 continue
-            q = int(fp[1])
-            existing = result.get((fy, q))
-            if not existing or row["filed"] > existing["filed"]:
-                result[(fy, q)] = {"val": float(row["val"]), "filed": row["filed"]}
-        return {k: v["val"] for k, v in result.items()}
-    return {}
+            period = _calendar_period(row)
+            if not period:
+                continue
+            year, q = period
+            canonical_frame = f"CY{year}Q{q}"
+            row_canonical = row.get("frame") == canonical_frame
+
+            existing = result.get(period)
+            if not existing:
+                result[period] = {"val": float(row["val"]), "filed": row["filed"], "canonical": row_canonical}
+            elif row_canonical and not existing["canonical"]:
+                result[period] = {"val": float(row["val"]), "filed": row["filed"], "canonical": True}
+            elif row_canonical == existing["canonical"] and row["filed"] > existing["filed"]:
+                result[period] = {"val": float(row["val"]), "filed": row["filed"], "canonical": row_canonical}
+    return {k: v["val"] for k, v in result.items()}
 
 
 def _extract_quarterly_q4_from_annual(us_gaap: dict, concepts: list[str], q123: dict) -> dict:
-    """If Q4 wasn't reported separately, compute it as FY - (Q1 + Q2 + Q3)."""
+    """Derive the missing fiscal-year-end quarter from FY annual totals.
+
+    For companies with calendar fiscal year (Cigna), the missing quarter is calendar Q4.
+    For non-calendar fiscal years (Apple's FY ends in Sept), it's whatever calendar
+    quarter the fiscal year ends in. We use the FY entry's end_date to determine
+    which calendar quarter to populate."""
     annual = {}
     for c in concepts:
         if c not in us_gaap:
@@ -106,31 +140,44 @@ def _extract_quarterly_q4_from_annual(us_gaap: dict, concepts: list[str], q123: 
         for row in units[unit_key]:
             if row.get("fp") != "FY":
                 continue
-            # Annual entries should span ~365 days
             start, end = row.get("start"), row.get("end")
-            if start and end:
-                try:
-                    days = (datetime.fromisoformat(end) - datetime.fromisoformat(start)).days
-                    if not (340 <= days <= 380):
-                        continue
-                except Exception:
+            if not (start and end):
+                continue
+            try:
+                d_end = datetime.fromisoformat(end)
+                days = (d_end - datetime.fromisoformat(start)).days
+                if not (340 <= days <= 380):
                     continue
-            fy = row.get("fy")
-            existing = annual.get(fy)
-            if not existing or row["filed"] > existing["filed"]:
-                annual[fy] = {"val": float(row["val"]), "filed": row["filed"]}
-        break
+            except Exception:
+                continue
 
-    q4 = {}
-    for fy, fy_row in annual.items():
-        if (fy, 4) in q123:  # already have it from a 10-Q
+            end_period = (d_end.year, (d_end.month - 1) // 3 + 1)
+            row_canonical = row.get("frame") == f"CY{d_end.year}"
+            existing = annual.get(end_period)
+            if not existing:
+                annual[end_period] = {"val": float(row["val"]), "filed": row["filed"], "canonical": row_canonical}
+            elif row_canonical and not existing["canonical"]:
+                annual[end_period] = {"val": float(row["val"]), "filed": row["filed"], "canonical": True}
+            elif row_canonical == existing["canonical"] and row["filed"] > existing["filed"]:
+                annual[end_period] = {"val": float(row["val"]), "filed": row["filed"], "canonical": row_canonical}
+
+    derived = {}
+    for end_period, ann in annual.items():
+        if end_period in q123:  # already covered by a 10-Q
             continue
-        q1 = q123.get((fy, 1))
-        q2 = q123.get((fy, 2))
-        q3 = q123.get((fy, 3))
-        if q1 is not None and q2 is not None and q3 is not None:
-            q4[(fy, 4)] = fy_row["val"] - q1 - q2 - q3
-    return q4
+        # Find the 3 prior calendar quarters within this fiscal year
+        end_year, end_q = end_period
+        prior = []
+        for i in range(1, 4):
+            pq = end_q - i
+            py = end_year
+            if pq <= 0:
+                pq += 4
+                py -= 1
+            prior.append((py, pq))
+        if all(p in q123 for p in prior):
+            derived[end_period] = ann["val"] - sum(q123[p] for p in prior)
+    return derived
 
 
 def backfill_from_sec(ticker: str) -> int:
