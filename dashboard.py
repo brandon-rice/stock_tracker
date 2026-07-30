@@ -5,7 +5,7 @@ import plotly.express as px
 from datetime import date, timedelta, datetime
 from db.connection import get_sessions
 from db.models import Stock, DailyPrice, MovingAverage, Financials, ComputedMetrics, Sentiment, Transcript, News, QuarterlyReport
-from analysis.quarterly import quarterly_metrics
+from analysis.quarterly import quarterly_metrics, ttm_revenue
 
 st.set_page_config(page_title="Stock Portfolio Tracker", layout="wide", page_icon="📈")
 
@@ -66,6 +66,17 @@ if page == "Portfolio Overview":
             if p and (latest_price_date is None or p.date > latest_price_date):
                 latest_price_date = p.date
 
+            # Last 9 quarters needed so 5 displayed quarters can each compute YOY
+            fin_rows = (
+                local.query(Financials)
+                .filter_by(stock_id=s.id)
+                .order_by(Financials.fiscal_year.desc(), Financials.fiscal_quarter.desc())
+                .limit(9)
+                .all()
+            )
+            quarterly_by_ticker[ticker] = quarterly_metrics(fin_rows)[:5]
+            ttm = ttm_revenue(fin_rows)
+
             rows.append({
                 "Ticker": ticker,
                 "Company": name,
@@ -73,6 +84,7 @@ if page == "Portfolio Overview":
                 "Change": _pct(chg),
                 "PE": _fmt(p.pe_ratio if p else None, prefix=""),
                 "EPS": _fmt(p.eps if p else None),
+                "TTM Rev": _fmt(ttm / 1e9, prefix="$", suffix="B") if ttm else "N/A",
                 "52W High": _fmt(p.fifty_two_week_high if p else None),
                 "52W Low": _fmt(p.fifty_two_week_low if p else None),
                 "D/E": _fmt(p.debt_to_equity if p else None, prefix=""),
@@ -83,16 +95,6 @@ if page == "Portfolio Overview":
                 "YOY Earn": _pct(m.yoy_earnings_growth if m else None),
                 "FCF YOY": _pct(m.fcf_yoy if m else None),
             })
-
-            # Last 9 quarters needed so 5 displayed quarters can each compute YOY
-            fin_rows = (
-                local.query(Financials)
-                .filter_by(stock_id=s.id)
-                .order_by(Financials.fiscal_year.desc(), Financials.fiscal_quarter.desc())
-                .limit(9)
-                .all()
-            )
-            quarterly_by_ticker[ticker] = quarterly_metrics(fin_rows)[:5]
 
     if latest_price_date:
         st.caption(f"Latest price data as of: **{latest_price_date}**  |  Loaded: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
@@ -174,13 +176,15 @@ elif page == "Stock Detail":
             st.plotly_chart(fig, use_container_width=True)
 
         # Financials charts
-        fin_rows = (
+        # Newest 8 quarters, then flipped to chronological order for the charts.
+        # Sorting ascending before LIMIT would return the OLDEST 8 rows on record.
+        fin_rows = list(reversed(
             local.query(Financials)
             .filter_by(stock_id=s.id)
-            .order_by(Financials.fiscal_year, Financials.fiscal_quarter)
+            .order_by(Financials.fiscal_year.desc(), Financials.fiscal_quarter.desc())
             .limit(8)
             .all()
-        )
+        ))
 
         if fin_rows:
             st.subheader("Quarterly Financials")
@@ -189,7 +193,7 @@ elif page == "Stock Detail":
             col1, col2, col3 = st.columns(3)
             with col1:
                 rev = [r.revenue / 1e9 if r.revenue else None for r in fin_rows]
-                fig2 = px.bar(x=labels, y=rev, title="Revenue ($B)", color_discrete_sequence=["#3498db"])
+                fig2 = px.bar(x=labels, y=rev, title="Quarterly Revenue ($B)", color_discrete_sequence=["#3498db"])
                 fig2.update_layout(height=300, margin=dict(l=0, r=0, t=40, b=0), showlegend=False)
                 st.plotly_chart(fig2, use_container_width=True)
             with col2:
@@ -208,12 +212,14 @@ elif page == "Stock Detail":
         m = local.query(ComputedMetrics).filter_by(stock_id=s.id).order_by(ComputedMetrics.computed_date.desc()).first()
         if p or m:
             st.subheader("Key Metrics")
-            c1, c2, c3, c4, c5 = st.columns(5)
+            ttm = ttm_revenue(fin_rows)
+            c1, c2, c3, c4, c5, c6 = st.columns(6)
             c1.metric("PE Ratio", _fmt(p.pe_ratio if p else None, prefix=""))
             c2.metric("EPS", _fmt(p.eps if p else None))
-            c3.metric("Debt/Equity", _fmt(p.debt_to_equity if p else None, prefix=""))
-            c4.metric("52W High", _fmt(p.fifty_two_week_high if p else None))
-            c5.metric("52W Low", _fmt(p.fifty_two_week_low if p else None))
+            c3.metric("TTM Revenue", _fmt(ttm / 1e9, prefix="$", suffix="B") if ttm else "N/A")
+            c4.metric("Debt/Equity", _fmt(p.debt_to_equity if p else None, prefix=""))
+            c5.metric("52W High", _fmt(p.fifty_two_week_high if p else None))
+            c6.metric("52W Low", _fmt(p.fifty_two_week_low if p else None))
 
             if m:
                 c1b, c2b, c3b, c4b = st.columns(4)

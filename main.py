@@ -271,6 +271,8 @@ def portfolio_summary(ticker):
         click.echo(f"  PE Ratio:       {p['pe_ratio']:.2f}" if p['pe_ratio'] else "  PE Ratio:       N/A")
         click.echo(f"  EPS:            ${p['eps']:.2f}" if p['eps'] else "  EPS:            N/A")
         click.echo(f"  Debt/Equity:    {p['debt_to_equity']:.2f}" if p['debt_to_equity'] else "  Debt/Equity:    N/A")
+        ttm = s.get("ttm_revenue")
+        click.echo(f"  TTM Revenue:    ${ttm/1e9:,.2f}B" if ttm else "  TTM Revenue:    N/A")
 
         click.echo(f"\n  Moving Averages:")
         click.echo(f"    30-day: ${ma['ma_30']:,.2f}" if ma.get('ma_30') else "    30-day: N/A")
@@ -285,7 +287,7 @@ def portfolio_summary(ticker):
 
         fin = s.get("financials", [])
         if fin:
-            click.echo(f"\n  Recent Financials:")
+            click.echo(f"\n  Recent Financials (per quarter):")
             click.echo(f"    {'Quarter':<10} {'Revenue':>12} {'Net Income':>12} {'FCF':>12}")
             for f in fin:
                 rev = f"${f['revenue']/1e9:.2f}B" if f['revenue'] else "N/A"

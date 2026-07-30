@@ -4,6 +4,7 @@ Fills gaps yfinance can't cover: it only returns ~5 quarters, but YOY
 growth needs the prior-year same quarter. EDGAR has 5+ years of data.
 """
 import requests
+import yfinance as yf
 from datetime import datetime
 from sqlalchemy.dialects.postgresql import insert
 from db.connection import get_sessions
@@ -65,7 +66,8 @@ def _is_single_quarter(row: dict) -> bool:
     """A single fiscal quarter is ~3 months (80-100 days). YTD entries are longer."""
     start, end = row.get("start"), row.get("end")
     if not start or not end:
-        return True  # instantaneous values (EPS, balance sheet items)
+        return True  # genuinely instantaneous values (balance sheet items). NOT EPS —
+        # EPS carries start/end and must be filtered like any other duration concept.
     try:
         d1 = datetime.fromisoformat(start)
         d2 = datetime.fromisoformat(end)
@@ -87,13 +89,26 @@ def _calendar_period(row: dict) -> tuple[int, int] | None:
         return None
 
 
-def _extract_concept(us_gaap: dict, concepts: list[str], duration: str = "quarter") -> dict[tuple[int, int], float]:
+def _extract_concept(
+    us_gaap: dict,
+    concepts: list[str],
+    duration: str = "quarter",
+    prefer_latest_filed: bool = False,
+    return_meta: bool = False,
+) -> dict[tuple[int, int], float]:
     """Returns {(year, q): value}. Dedups by calendar period (from end_date) and
     prefers entries whose `frame` matches the canonical CY{year}Q{q} tag.
 
     Merges across all listed concepts because companies sometimes split data
     across XBRL tags over time (e.g., AAPL used SalesRevenueNet pre-2018,
-    Revenues briefly, then RevenueFromContractWithCustomerExcludingAssessedTax)."""
+    Revenues briefly, then RevenueFromContractWithCustomerExcludingAssessedTax).
+
+    `prefer_latest_filed` flips the dedup priority from (canonical, filed) to
+    (filed, canonical). Per-share concepts get restated by stock splits, and SEC
+    pins the canonical frame to the ORIGINAL pre-split filing — so canonical-first
+    keeps the pre-split number and leaves the series mixing pre- and post-split
+    values (NFLX 10-for-1, Nov 2025). Do NOT set this for absolute-dollar concepts
+    like revenue: there the canonical frame is the defense against YTD duplicates."""
     result: dict[tuple[int, int], dict] = {}
     for c in concepts:
         if c not in us_gaap:
@@ -109,17 +124,61 @@ def _extract_concept(us_gaap: dict, concepts: list[str], duration: str = "quarte
             if not period:
                 continue
             year, q = period
-            canonical_frame = f"CY{year}Q{q}"
-            row_canonical = row.get("frame") == canonical_frame
+            row_canonical = row.get("frame") == f"CY{year}Q{q}"
+            rank = (row["filed"], row_canonical) if prefer_latest_filed else (row_canonical, row["filed"])
 
             existing = result.get(period)
-            if not existing:
-                result[period] = {"val": float(row["val"]), "filed": row["filed"], "canonical": row_canonical}
-            elif row_canonical and not existing["canonical"]:
-                result[period] = {"val": float(row["val"]), "filed": row["filed"], "canonical": True}
-            elif row_canonical == existing["canonical"] and row["filed"] > existing["filed"]:
-                result[period] = {"val": float(row["val"]), "filed": row["filed"], "canonical": row_canonical}
+            if not existing or rank > existing["rank"]:
+                result[period] = {
+                    "val": float(row["val"]),
+                    "filed": row["filed"],
+                    "end": row.get("end"),
+                    "rank": rank,
+                }
+    if return_meta:
+        return {k: {"val": v["val"], "filed": v["filed"], "end": v["end"]} for k, v in result.items()}
     return {k: v["val"] for k, v in result.items()}
+
+
+def _split_adjust_eps(ticker: str, eps_meta: dict) -> dict[tuple[int, int], float]:
+    """Normalize as-reported EPS onto the current share basis.
+
+    XBRL stores EPS as reported at filing time, and a company only restates the
+    single comparative period in each 10-Q — a rolling one-year window. So after a
+    split the series mixes bases indefinitely: NFLX split 10-for-1 in Nov 2025, and
+    Q3 2025 (filed Oct 2025) still reads 5.87 while Q2 2025 (restated Jul 2026)
+    reads 0.72. Comparing them yields a fake -85% YOY.
+
+    An entry is already split-adjusted iff it was filed after the split, so we divide
+    by the cumulative ratio of splits occurring after BOTH the quarter end and the
+    filing date. That compounds correctly across multiple splits."""
+    plain = {k: v["val"] for k, v in eps_meta.items()}
+    try:
+        splits = yf.Ticker(ticker).splits
+    except Exception as e:
+        print(f"SEC EDGAR: could not load split history for {ticker} ({e}); EPS left as-reported")
+        return plain
+    if splits is None or splits.empty:
+        return plain
+
+    events = [(d.date(), float(r)) for d, r in splits.items() if r and float(r) > 0]
+    if not events:
+        return plain
+
+    out = {}
+    for period, meta in eps_meta.items():
+        try:
+            q_end = datetime.fromisoformat(meta["end"]).date()
+            filed = datetime.fromisoformat(meta["filed"]).date()
+        except (TypeError, ValueError):
+            out[period] = meta["val"]
+            continue
+        ratio = 1.0
+        for split_date, r in events:
+            if split_date > q_end and split_date > filed:
+                ratio *= r
+        out[period] = round(meta["val"] / ratio, 4) if ratio != 1.0 else meta["val"]
+    return out
 
 
 def _extract_quarterly_q4_from_annual(us_gaap: dict, concepts: list[str], q123: dict) -> dict:
@@ -193,7 +252,14 @@ def backfill_from_sec(ticker: str) -> int:
 
     revenue = _extract_concept(us_gaap, REVENUE_CONCEPTS)
     net_income = _extract_concept(us_gaap, NET_INCOME_CONCEPTS)
-    eps = _extract_concept(us_gaap, EPS_CONCEPTS, duration="any")
+    # EPS is a duration concept, not an instantaneous one — it must be filtered to
+    # single quarters like the rest. Without that, the fiscal-year-end quarter picks
+    # up the FY annual EPS (both end on the same date, and the 10-K carries no
+    # standalone Q4 column), silently reporting a full year as one quarter.
+    eps = _split_adjust_eps(
+        ticker,
+        _extract_concept(us_gaap, EPS_CONCEPTS, prefer_latest_filed=True, return_meta=True),
+    )
     ocf = _extract_concept(us_gaap, OCF_CONCEPTS)
     capex = _extract_concept(us_gaap, CAPEX_CONCEPTS)
 

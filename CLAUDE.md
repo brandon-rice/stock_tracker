@@ -97,6 +97,11 @@ Local .md/.txt  → data/transcripts.py   (load_transcript_from_file — manual 
 - Insurance/financial companies (Cigna) report quarterly net income under `NetIncomeLossAvailableToCommonStockholdersBasic`, not `NetIncomeLoss` (which is annual-only for them). The fallback list handles this.
 - `_extract_quarterly_q4_from_annual()` derives the **fiscal-year-end quarter** from FY totals — for Apple this is calendar Q3, not Q4 (their FY ends in September). Uses the FY entry's end_date to determine the target calendar quarter.
 - All quarter labels are **calendar quarters**, matching yfinance's labeling. AAPL's "fiscal Q1 2026" is stored as calendar Q4 2025 (the holiday quarter).
+- **EPS is a duration concept, not an instantaneous one** — it must go through the same single-quarter filter as revenue. It was previously extracted with `duration="any"`, which let the FY annual EPS land on the fiscal-year-end quarter (both end on the same date, and the 10-K carries no standalone Q4 column). Every Q4 EPS in the table was silently a full-year figure.
+- EPS uses `prefer_latest_filed=True` to flip dedup priority from `(canonical, filed)` to `(filed, canonical)`. SEC pins the canonical `CY{y}Q{q}` frame to the **original** filing, so canonical-first keeps pre-split values. **Do not set this flag for absolute-dollar concepts** — there the canonical frame is the defense against YTD duplicates.
+- `_split_adjust_eps()` normalizes EPS onto the current share basis. XBRL stores EPS as-reported, and a company only restates the single comparative period in each 10-Q — a rolling one-year window — so a split leaves the series mixing bases indefinitely. An entry is already adjusted iff filed after the split, so it divides by the ratio of splits occurring after **both** the quarter end and the filing date (compounds correctly across multiple splits). Split history comes from yfinance.
+- The fiscal-year-end quarter legitimately has **no EPS** from EDGAR for most companies. It's left NULL rather than derived — net income ÷ shares doesn't reconcile with diluted EPS. `fetch-financials` (yfinance) refills it for the ~5 recent quarters it covers, so **run `fetch-financials` after `backfill-financials`** when EPS matters.
+- SEC's `_store()` skips `None` values in its `ON CONFLICT` set (so it never clobbers yfinance data), which means a backfill **cannot clear** a previously-written bad value. Fresh tickers are fine; repairing already-backfilled rows needs an explicit UPDATE.
 
 ### numpy type handling
 yfinance 1.x and pandas operations return `numpy.float64` values. psycopg2 cannot serialize these — it interprets the type prefix as a schema name (`schema "np" does not exist`). **Always cast to `float()` before inserting into the DB**. Established patterns:
@@ -129,6 +134,9 @@ Save transcripts as `$TRANSCRIPTS_DIR/{TICKER}/{YEAR}_Q{N}.md` (or `.txt`). Defa
 - **Quarterly** (1st of Jan/Apr/Jul/Oct, 6 AM ET): financials + metrics + email report
 
 Run as a long-lived process with `python main.py start-scheduler`. There is no scheduled job for transcripts/sentiment — those are manually triggered after the user saves a transcript file.
+
+### Quarterly vs TTM revenue
+Everything in `financials` is **single-quarter**, but Yahoo and most finance sites headline **TTM** revenue — so the portfolio looks ~4x smaller for the same company. `analysis/quarterly.py:ttm_revenue()` sums the last 4 quarters and is surfaced as "TTM Revenue" in `portfolio-summary`, the dashboard overview table, Stock Detail key metrics, and the email report. It returns `None` unless all 4 quarters have revenue — a partial sum reads as a collapse rather than as missing data. Per-quarter tables and charts are labeled "quarterly" to keep the distinction visible.
 
 ### Dashboard refresh date convention
 Every Streamlit page surfaces a "data as of" caption from the underlying table's timestamp:

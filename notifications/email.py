@@ -101,6 +101,7 @@ def render_html_report(report_data: list[dict]) -> str:
                         <table style="width:100%;font-size:13px">
                             <tr><td>PE Ratio</td><td>{_fmt(p.get('pe_ratio'))}</td></tr>
                             <tr><td>EPS</td><td>{_fmt(p.get('eps'), prefix='$')}</td></tr>
+                            <tr><td>TTM Revenue</td><td>{_fmt(s.get('ttm_revenue') / 1e9, prefix='$', suffix='B') if s.get('ttm_revenue') else 'N/A'}</td></tr>
                             <tr><td>52W High</td><td>{_fmt(p.get('high_52w'), prefix='$')}</td></tr>
                             <tr><td>52W Low</td><td>{_fmt(p.get('low_52w'), prefix='$')}</td></tr>
                             <tr><td>Debt/Equity</td><td>{_fmt(p.get('debt_to_equity'))}</td></tr>
