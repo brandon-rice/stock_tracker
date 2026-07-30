@@ -9,6 +9,21 @@ def _pct_change(new, old):
     return None
 
 
+def ttm_revenue(financials_rows) -> float | None:
+    """Trailing-twelve-month revenue — the sum of the four most recent quarters.
+
+    This is the figure Yahoo and most sites show as "Revenue"; everything else in
+    this project is single-quarter, which makes the portfolio look ~4x smaller.
+
+    Returns None unless all four quarters have revenue: a partial sum would silently
+    understate TTM and read as a collapse rather than as missing data.
+    """
+    rows = sorted(financials_rows, key=lambda r: (r.fiscal_year, r.fiscal_quarter), reverse=True)[:4]
+    if len(rows) < 4 or any(r.revenue is None for r in rows):
+        return None
+    return float(sum(r.revenue for r in rows))
+
+
 def quarterly_metrics(financials_rows) -> list[dict]:
     """Given Financials rows (any order), return per-quarter dicts with YOY/QOQ growth.
 
@@ -140,6 +155,7 @@ def _stock_snapshot(session, stock) -> dict:
             "ma_90": ma_row.ma_90 if ma_row else None,
             "date": str(ma_row.date) if ma_row else None,
         },
+        "ttm_revenue": ttm_revenue(fin_rows),
         "financials": [
             {
                 "fiscal_year": r.fiscal_year,
